@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: mrdoors_postgres
+    environment:
+      POSTGRES_DB: mrdoors
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mrdoors_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mrdoors_network
+
+  # Backend API Service
+  backend:
+    build:
+      context: ./analytics_service/backend
+      dockerfile: Dockerfile
+    container_name: mrdoors_backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-mrdoors_password}@postgres:5432/mrdoors
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:80,http://frontend
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - mrdoors_network
+    restart: unless-stopped
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./analytics-dashboard
+      dockerfile: Dockerfile
+    container_name: mrdoors_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - mrdoors_network
+    restart: unless-stopped
+
+  # Telegram Bot Service
+  telegram_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mrdoors_bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_VISION_MODEL=${OPENAI_VISION_MODEL:-gpt-4o}
+      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-45}
+      - OPENAI_RETRIES=${OPENAI_RETRIES:-2}
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-mrdoors_password}@postgres:5432/mrdoors
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ANALYTICS_API_URL=http://backend:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - mrdoors_network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    container_name: mrdoors_nginx
+    ports:
+      - "443:443"
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - mrdoors_network
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  mrdoors_network:
+    driver: bridge

@@ -1,0 +1,11 @@
+# Core dependencies
+pyTelegramBotAPI==4.14.0
+openai==1.54.4
+httpx==0.27.2
+tenacity==9.0.0
+python-dotenv==1.0.1
+Pillow==10.4.0
+
+# Development and testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
